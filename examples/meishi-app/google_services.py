@@ -19,12 +19,30 @@ SHEET_HEADERS = [
 
 
 def _get_credentials() -> Credentials:
-    creds = None
+    # 環境変数からトークンを読み込む（Railwayなどのクラウド環境用）
+    if os.environ.get("GOOGLE_TOKEN_JSON"):
+        import json as _json
+        token_data = _json.loads(os.environ["GOOGLE_TOKEN_JSON"])
+        creds = Credentials(
+            token=token_data.get("token"),
+            refresh_token=token_data.get("refresh_token"),
+            token_uri=token_data.get("token_uri"),
+            client_id=token_data.get("client_id"),
+            client_secret=token_data.get("client_secret"),
+            scopes=token_data.get("scopes"),
+        )
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        return creds
+
+    # ローカル開発用：token.jsonファイルから読み込む
     token_file = os.environ.get("GOOGLE_TOKEN_FILE", "token.json")
     creds_file = os.environ.get("GOOGLE_CREDENTIALS_FILE", "credentials.json")
 
     if os.path.exists(token_file):
         creds = Credentials.from_authorized_user_file(token_file, SCOPES)
+    else:
+        creds = None
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
