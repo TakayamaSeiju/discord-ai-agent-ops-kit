@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>名刺スキャンアプリ</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Hiragino Sans', 'Meiryo', sans-serif; background: #f5f5f5; color: #333; }
+    .container { max-width: 720px; margin: 40px auto; padding: 0 16px; }
+    h1 { font-size: 1.6rem; margin-bottom: 8px; }
+    .subtitle { color: #666; font-size: 0.9rem; margin-bottom: 32px; }
+    .card { background: white; border-radius: 12px; padding: 28px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 24px; }
+    .card h2 { font-size: 1rem; margin-bottom: 16px; color: #444; }
+    .drop-zone {
+      border: 2px dashed #bbb; border-radius: 8px; padding: 40px 20px;
+      text-align: center; cursor: pointer; transition: border-color 0.2s;
+    }
+    .drop-zone:hover, .drop-zone.dragover { border-color: #4a90e2; background: #f0f7ff; }
+    .drop-zone p { color: #888; margin-top: 8px; font-size: 0.85rem; }
+    .drop-zone .icon { font-size: 2.5rem; }
+    #preview { max-width: 100%; max-height: 240px; border-radius: 8px; margin-top: 16px; display: none; }
+    textarea {
+      width: 100%; border: 1px solid #ddd; border-radius: 8px;
+      padding: 12px; font-size: 0.9rem; resize: vertical; min-height: 120px;
+      font-family: inherit;
+    }
+    textarea:focus { outline: none; border-color: #4a90e2; }
+    .hint { font-size: 0.8rem; color: #888; margin-top: 6px; }
+    button[type="submit"] {
+      width: 100%; background: #4a90e2; color: white; border: none;
+      border-radius: 8px; padding: 14px; font-size: 1rem; cursor: pointer;
+      transition: background 0.2s;
+    }
+    button[type="submit"]:hover { background: #357abd; }
+    button[type="submit"]:disabled { background: #aaa; cursor: not-allowed; }
+    .result { display: none; }
+    .result-section { margin-bottom: 16px; }
+    .result-section h3 { font-size: 0.9rem; color: #666; margin-bottom: 10px; }
+    .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .info-item { font-size: 0.9rem; }
+    .info-item .label { color: #888; font-size: 0.78rem; margin-bottom: 2px; }
+    .info-item .value { font-weight: 500; }
+    .badge {
+      display: inline-block; border-radius: 20px; padding: 4px 12px;
+      font-size: 0.8rem; margin-right: 8px; margin-bottom: 8px;
+    }
+    .badge.success { background: #e6f4ea; color: #2d7a45; }
+    .badge.skip { background: #f0f0f0; color: #888; }
+    .badge.error { background: #fce8e8; color: #c0392b; }
+    .spinner { display: none; text-align: center; padding: 24px; color: #888; }
+    .error-msg { color: #c0392b; font-size: 0.85rem; margin-top: 8px; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>名刺スキャンアプリ</h1>
+  <p class="subtitle">名刺画像をアップロードすると、情報を自動抽出してスプレッドシートに保存し、御礼メールの下書きを作成します。</p>
+
+  <form id="uploadForm">
+    <div class="card">
+      <h2>1. 名刺画像をアップロード</h2>
+      <div class="drop-zone" id="dropZone">
+        <div class="icon">📇</div>
+        <p>クリックまたはドラッグ&ドロップ</p>
+        <p>JPEG / PNG / WebP（最大5MB）</p>
+        <input type="file" id="imageInput" name="image" accept="image/*" style="display:none" required>
+        <img id="preview" alt="プレビュー">
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>2. 御礼メールに含めたい内容（任意）</h2>
+      <textarea name="memo" id="memo" placeholder="例：&#10;・先日の展示会でお会いしたお礼&#10;・今後のご連絡先を確認したい&#10;・近日中に打ち合わせの機会をいただきたい"></textarea>
+      <p class="hint">箇条書きで記入するとClaudeが文面を生成します。空欄の場合は下書きを作成しません。</p>
+    </div>
+
+    <button type="submit" id="submitBtn">名刺を処理する</button>
+  </form>
+
+  <div class="spinner" id="spinner">
+    <p>処理中... しばらくお待ちください</p>
+  </div>
+
+  <div class="card result" id="result">
+    <h2>処理結果</h2>
+
+    <div class="result-section">
+      <h3>抽出された名刺情報</h3>
+      <div class="info-grid" id="cardInfo"></div>
+    </div>
+
+    <div class="result-section">
+      <h3>処理ステータス</h3>
+      <div id="statusBadges"></div>
+    </div>
+
+    <div id="errorList"></div>
+  </div>
+</div>
+
+<script>
+const dropZone = document.getElementById('dropZone');
+const imageInput = document.getElementById('imageInput');
+const preview = document.getElementById('preview');
+const form = document.getElementById('uploadForm');
+const submitBtn = document.getElementById('submitBtn');
+const spinner = document.getElementById('spinner');
+const result = document.getElementById('result');
+
+dropZone.addEventListener('click', () => imageInput.click());
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) setFile(file);
+});
+
+imageInput.addEventListener('change', () => {
+  if (imageInput.files[0]) setFile(imageInput.files[0]);
+});
+
+function setFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    preview.src = e.target.result;
+    preview.style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+
+  const dt = new DataTransfer();
+  dt.items.add(file);
+  imageInput.files = dt.files;
+}
+
+const LABELS = {
+  name: '氏名', name_kana: 'ふりがな', company: '会社名',
+  department: '部署', title: '役職', email: 'メール',
+  phone: '電話', mobile: '携帯', address: '住所', website: 'ウェブサイト',
+};
+
+form.addEventListener('submit', async e => {
+  e.preventDefault();
+  if (!imageInput.files[0]) { alert('画像を選択してください'); return; }
+
+  submitBtn.disabled = true;
+  spinner.style.display = 'block';
+  result.style.display = 'none';
+
+  const formData = new FormData(form);
+
+  try {
+    const res = await fetch('/process', { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (!res.ok) { throw new Error(data.detail || 'エラーが発生しました'); }
+
+    // 名刺情報
+    const cardInfoEl = document.getElementById('cardInfo');
+    cardInfoEl.innerHTML = '';
+    for (const [key, label] of Object.entries(LABELS)) {
+      const val = data.card_info[key];
+      if (val) {
+        cardInfoEl.innerHTML += `
+          <div class="info-item">
+            <div class="label">${label}</div>
+            <div class="value">${val}</div>
+          </div>`;
+      }
+    }
+
+    // ステータス
+    const badges = document.getElementById('statusBadges');
+    badges.innerHTML = `
+      <span class="badge ${data.sheet_updated ? 'success' : 'skip'}">
+        ${data.sheet_updated ? 'スプレッドシート 記録済' : 'スプレッドシート スキップ'}
+      </span>
+      <span class="badge ${data.draft_created ? 'success' : 'skip'}">
+        ${data.draft_created ? 'Gmailに下書き作成済' : 'メール下書き スキップ'}
+      </span>`;
+
+    // エラー
+    const errorList = document.getElementById('errorList');
+    errorList.innerHTML = data.errors.map(e => `<p class="error-msg">${e}</p>`).join('');
+
+    result.style.display = 'block';
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    submitBtn.disabled = false;
+    spinner.style.display = 'none';
+  }
+});
+</script>
+</body>
+</html>
